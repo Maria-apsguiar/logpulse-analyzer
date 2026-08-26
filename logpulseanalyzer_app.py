@@ -8,7 +8,9 @@ from datetime import datetime
 from collections import Counter
 import pypdf
 
-# Configuração da página
+# -----------------------------------------------------------------------------
+# CONFIGURAÇÃO DA PÁGINA STREAMLIT
+# -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="LogPulse AI — Analisador & Gerador de Relatórios",
     page_icon="🛡️",
@@ -28,7 +30,7 @@ RE_SEVERITY = re.compile(r'\b(CRITICAL|FATAL|ERROR|WARN|WARNING|INFO|DEBUG|TRACE
 RE_DYNAMIC = re.compile(r'(\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b|\b0x[0-9a-fA-F]+\b|\b\d{4,}\b|(?<=\=)[^\s,;&]+)')
 
 def sanitize_text(text: str) -> str:
-    """Mascara dados sensíveis (Anti-PII e Secrets) conforme governança de segurança."""
+    """Mascara dados sensíveis (Anti-PII e Secrets)."""
     text = RE_TOKEN.sub('[REDACTED_SECRET]', text)
     text = RE_EMAIL.sub('u***@domain.com', text)
     text = RE_CPF.sub('***.***.***-**', text)
@@ -42,7 +44,7 @@ def canonicalize_error(message: str) -> str:
     return clean[:220]
 
 def extract_content(uploaded_file) -> str:
-    """Lê arquivos nos formatos .log, .txt, .csv, .pdf, .json."""
+    """Lê múltiplos formatos (.log, .txt, .csv, .pdf, .json)."""
     ext = uploaded_file.name.split('.')[-1].lower()
     try:
         if ext == 'pdf':
@@ -58,7 +60,7 @@ def extract_content(uploaded_file) -> str:
         else:
             return uploaded_file.read().decode('utf-8', errors='ignore')
     except Exception as e:
-        st.error(f"Erro ao ler arquivo {uploaded_file.name}: {e}")
+        st.error(f"Erro ao ler {uploaded_file.name}: {e}")
         return ""
 
 def process_log(raw_text: str):
@@ -72,7 +74,6 @@ def process_log(raw_text: str):
     first_seen = {}
     last_seen = {}
     severities = {}
-    sample_lines = {}
     
     for idx, line in enumerate(lines):
         if not line.strip():
@@ -91,7 +92,6 @@ def process_log(raw_text: str):
             error_counter[canonical] += 1
             if canonical not in first_seen:
                 first_seen[canonical] = ts
-                sample_lines[canonical] = sanitized[:160]
             last_seen[canonical] = ts
             severities[canonical] = "CRITICAL" if sev in ["CRITICAL", "FATAL"] else "ERROR"
         elif sev == "WARN":
@@ -112,19 +112,19 @@ def process_log(raw_text: str):
         "warn_counter": warn_counter,
         "first_seen": first_seen,
         "last_seen": last_seen,
-        "severities": severities,
-        "sample_lines": sample_lines
+        "severities": severities
     }
 
 # -----------------------------------------------------------------------------
-# 2. GERADOR DE RELATÓRIO BASEADO NO MODELO SA-AIC DOCUMENT TEMPLATE
+# 2. GERADORES DE RELATÓRIO NO MODELO SA-AIC DOCUMENT TEMPLATE
 # -----------------------------------------------------------------------------
-def build_sa_aic_html_report(filename: str, metrics: dict, diff_data: dict = None) -> str:
+def build_sa_aic_html_report(title_ctx: str, metrics: dict, diff_data: dict = None, batch_summary: list = None) -> str:
     now_str = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
     total_errors = max(metrics['total_errors'], 1)
     
+    # Tabela de Erros
     error_rows_html = ""
-    for rank, (sig, count) in enumerate(metrics['error_counter'].most_common(10), start=1):
+    for rank, (sig, count) in enumerate(metrics['error_counter'].most_common(12), start=1):
         prop = (count / total_errors) * 100
         sev = metrics['severities'].get(sig, "ERROR")
         first = metrics['first_seen'].get(sig, "N/A")
@@ -141,6 +141,22 @@ def build_sa_aic_html_report(filename: str, metrics: dict, diff_data: dict = Non
         </tr>
         """
         
+    # Seção Batch (se houver múltiplos arquivos)
+    batch_section_html = ""
+    if batch_summary:
+        batch_rows = "".join([
+            f"<tr><td><b>{item['Arquivo']}</b></td><td style='text-align:center;'>{item['Linhas']:,}</td><td style='text-align:center;'>{item['Erros']:,}</td><td style='text-align:center;'>{item['Avisos']:,}</td><td style='text-align:center;'>{item['Erros Únicos']}</td></tr>"
+            for item in batch_summary
+        ])
+        batch_section_html = f"""
+        <h2>Sumário de Ingestão por Arquivo (Lote)</h2>
+        <table>
+            <thead><tr><th>Arquivo</th><th>Linhas</th><th>Erros</th><th>Avisos</th><th>Erros Únicos</th></tr></thead>
+            <tbody>{batch_rows}</tbody>
+        </table>
+        """
+
+    # Seção Diff (se houver comparação de versões)
     diff_section_html = ""
     if diff_data:
         diff_section_html = f"""
@@ -151,13 +167,9 @@ def build_sa_aic_html_report(filename: str, metrics: dict, diff_data: dict = Non
             • Erros Resolvidos: {len(diff_data['resolved'])} | Novas Regressões: {len(diff_data['regressions'])}
         </div>
         <h3>🟢 Erros Resolvidos com Sucesso</h3>
-        <ul>
-            {"".join([f"<li><code>{err}</code></li>" for err in list(diff_data['resolved'])[:5]]) or "<li>Nenhum erro resolvido identificado.</li>"}
-        </ul>
+        <ul>{"".join([f"<li><code>{err}</code></li>" for err in list(diff_data['resolved'])[:5]]) or "<li>Nenhum erro resolvido.</li>"}</ul>
         <h3>🔴 Novos Erros / Regressões Detectadas</h3>
-        <ul>
-            {"".join([f"<li><code>{err}</code></li>" for err in list(diff_data['regressions'])[:5]]) or "<li>Nenhuma regressão detectada.</li>"}
-        </ul>
+        <ul>{"".join([f"<li><code>{err}</code></li>" for err in list(diff_data['regressions'])[:5]]) or "<li>Nenhuma regressão detectada.</li>"}</ul>
         """
 
     html = f"""<!DOCTYPE html>
@@ -171,42 +183,12 @@ def build_sa_aic_html_report(filename: str, metrics: dict, diff_data: dict = Non
         @bottom-right {{ content: counter(page); font-size: 8pt; color: #64748b; }}
         @bottom-left {{ content: "SA-AIC - Modelo de Documento para Distribuição | LogPulse AI"; font-size: 8pt; color: #64748b; }}
     }}
-    body {{
-        font-family: 'Segoe UI', Arial, sans-serif;
-        color: #1e293b;
-        line-height: 1.5;
-        font-size: 9.5pt;
-        margin: 0;
-    }}
-    .header-card {{
-        background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
-        color: #ffffff;
-        padding: 20px 24px;
-        border-radius: 8px;
-        margin-bottom: 20px;
-    }}
+    body {{ font-family: 'Segoe UI', Arial, sans-serif; color: #1e293b; line-height: 1.5; font-size: 9.5pt; margin: 0; }}
+    .header-card {{ background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%); color: #ffffff; padding: 20px 24px; border-radius: 8px; margin-bottom: 20px; }}
     .header-card h1 {{ font-size: 16pt; margin: 0 0 6px 0; color: #ffffff; }}
     .header-card p {{ font-size: 9.5pt; margin: 0; color: #93c5fd; }}
-    .badge {{
-        display: inline-block;
-        background-color: #3b82f6;
-        color: #fff;
-        font-size: 7.5pt;
-        font-weight: bold;
-        padding: 2px 8px;
-        border-radius: 4px;
-        text-transform: uppercase;
-        margin-bottom: 6px;
-    }}
-    h2 {{
-        font-size: 12pt;
-        color: #0f172a;
-        border-left: 4px solid #2563eb;
-        padding-left: 10px;
-        margin-top: 20px;
-        margin-bottom: 8px;
-        page-break-after: avoid;
-    }}
+    .badge {{ display: inline-block; background-color: #3b82f6; color: #fff; font-size: 7.5pt; font-weight: bold; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; margin-bottom: 6px; }}
+    h2 {{ font-size: 12pt; color: #0f172a; border-left: 4px solid #2563eb; padding-left: 10px; margin-top: 20px; margin-bottom: 8px; page-break-after: avoid; }}
     h3 {{ font-size: 10pt; color: #1e3a8a; margin-top: 12px; margin-bottom: 6px; }}
     table {{ width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 8.5pt; }}
     th, td {{ border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }}
@@ -215,23 +197,8 @@ def build_sa_aic_html_report(filename: str, metrics: dict, diff_data: dict = Non
     .badge-error {{ color: #dc2626; font-weight: bold; }}
     .badge-critical {{ color: #7f1d1d; background: #fee2e2; padding: 2px 5px; border-radius: 3px; font-weight: bold; }}
     .badge-warn {{ color: #d97706; font-weight: bold; }}
-    .box-note {{
-        background-color: #eff6ff;
-        border: 1px solid #bfdbfe;
-        border-left: 4px solid #3b82f6;
-        padding: 10px 12px;
-        border-radius: 4px;
-        margin: 10px 0;
-    }}
-    .prompt-box {{
-        background-color: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 6px;
-        padding: 10px 12px;
-        margin-bottom: 8px;
-        font-family: monospace;
-        font-size: 8.5pt;
-    }}
+    .box-note {{ background-color: #eff6ff; border: 1px solid #bfdbfe; border-left: 4px solid #3b82f6; padding: 10px 12px; border-radius: 4px; margin: 10px 0; }}
+    .prompt-box {{ background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; font-family: monospace; font-size: 8.5pt; }}
 </style>
 </head>
 <body>
@@ -239,7 +206,7 @@ def build_sa_aic_html_report(filename: str, metrics: dict, diff_data: dict = Non
 <div class="header-card">
     <div class="badge">SA-AIC - Modelo de Documento para Distribuição</div>
     <h1>Relatório de Diagnóstico e Auditoria de Logs</h1>
-    <p><b>Arquivo de Origem:</b> {filename} | <b>Gerado em:</b> {now_str} | <b>Engine:</b> LogPulse AI</p>
+    <p><b>Escopo:</b> {title_ctx} | <b>Gerado em:</b> {now_str} | <b>Engine:</b> LogPulse AI</p>
 </div>
 
 <h2>Passo 1: Critérios Específicos da Tarefa (Framework CLEAR)</h2>
@@ -254,18 +221,20 @@ def build_sa_aic_html_report(filename: str, metrics: dict, diff_data: dict = Non
 
 <h2>Passo 2: Engenharia de Prompts Aplicada (Framework TRACI)</h2>
 <div class="prompt-box">
-<b>Tarefa 1 (Diagnóstico):</b><br>
+<b>Tarefa Principal:</b><br>
 • <b>Task:</b> Extrair e tabular falhas únicas dos arquivos submetidos.<br>
 • <b>Role:</b> Engenheiro de Confiabilidade de Sistemas (SRE).<br>
-• <b>Audience:</b> Desenvolvedores e Squad Leads.<br>
-• <b>Context:</b> Log recebido: {filename} com {metrics['total_lines']} linhas.<br>
-• <b>Instructions:</b> Sanitizar credenciais, calcular proporção de erros e propor causa provável.
+• <b>Audience:</b> Desenvolvedores, Tech Leads e DevOps.<br>
+• <b>Context:</b> Processamento de telemetria ({title_ctx}) com {metrics['total_lines']} linhas totais.<br>
+• <b>Instructions:</b> Sanitizar credenciais, computar frequência única e apontar causa provável.
 </div>
 
-<h2>1. Introdução & Visão Geral da Ferramenta</h2>
-<p>Este documento consolida o diagnóstico automatizado dos logs processados. Foram analisadas <b>{metrics['total_lines']} linhas</b>, detectando <b>{metrics['total_errors']} erros</b> e <b>{metrics['total_warns']} avisos</b> em <b>{len(metrics['error_counter'])} assinaturas canônicas exclusivas</b>.</p>
+<h2>1. Visão Geral do Volume de Telemetria</h2>
+<p>Foram analisadas <b>{metrics['total_lines']:,} linhas</b>, detectando <b>{metrics['total_errors']:,} erros</b> e <b>{metrics['total_warns']:,} avisos</b> distribuídos em <b>{len(metrics['error_counter'])} assinaturas canônicas exclusivas</b>.</p>
 
-<h2>2. Principais Falhas Detectadas (Tabela de Frequência & Padrões)</h2>
+{batch_section_html}
+
+<h2>2. Principais Falhas Detectadas (Tabela Consolidada de Frequência)</h2>
 <table>
     <thead>
         <tr>
@@ -287,7 +256,7 @@ def build_sa_aic_html_report(filename: str, metrics: dict, diff_data: dict = Non
 <ol>
     <li><b>Isolamento de Causa Raiz:</b> Inspecionar os endpoints e módulos associados aos erros ranqueados em #1 e #2.</li>
     <li><b>Sanitização e Segurança:</b> Todos os tokens, IPs e documentos foram substituídos por tags de anonimização.</li>
-    <li><b>Ações Preventivas:</b> Aplicar políticas de circuit-breaker e limites de pool para evitar esgotamento em cascata.</li>
+    <li><b>Ações Preventivas:</b> Aplicar políticas de circuit-breaker e limites de conexões para prevenir esgotamento em cascata.</li>
 </ol>
 
 {diff_section_html}
@@ -297,43 +266,50 @@ def build_sa_aic_html_report(filename: str, metrics: dict, diff_data: dict = Non
 """
     return html
 
-def build_sa_aic_markdown_report(filename: str, metrics: dict, diff_data: dict = None) -> str:
+def build_sa_aic_markdown_report(title_ctx: str, metrics: dict, diff_data: dict = None, batch_summary: list = None) -> str:
     now_str = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
     total_errors = max(metrics['total_errors'], 1)
     
     md = f"""# SA-AIC - Modelo de Documento para Distribuição
 # Relatório de Diagnóstico de Logs — LogPulse AI
 
-**Arquivo Analisado:** {filename}  
+**Escopo / Arquivos:** {title_ctx}  
 **Data da Análise:** {now_str}  
-**Volume Total de Linhas:** {metrics['total_lines']} | **Erros Detectados:** {metrics['total_errors']} | **Avisos (Warnings):** {metrics['total_warns']}
+**Volume Total de Linhas:** {metrics['total_lines']:,} | **Erros Detectados:** {metrics['total_errors']:,} | **Avisos (Warnings):** {metrics['total_warns']:,}
 
 ---
 
 ## Passo 1: Definir Critérios Específicos da Tarefa (Framework CLEAR)
-1. **Relevância do Contexto:** Foco prioritário em erros de severidade `CRITICAL`, `FATAL` e `ERROR`.
+1. **Relevância do Contexto:** Foco prioritário em falhas de severidade `CRITICAL`, `FATAL` e `ERROR`.
 2. **Tom e Estilo da Linguagem:** Técnico, assertivo, analítico e orientado a SRE.
-3. **Tratamento de Erros e Escalonamento:** Identificação de stack traces com sanitização anti-PII automática.
+3. **Tratamento de Erros e Escalonamento:** Identificação de stack traces com mascaramento anti-PII automático.
 4. **Precisão e Confiabilidade:** Contagem determinística agregada em $O(1)$.
-5. **Eficiência da Resposta:** Resumo tabular hierarquizado por frequência e severidade.
+5. **Eficiência da Resposta:** Resumo tabular hierarquizado por frequência e impacto percentual.
 
 ---
 
 ## Passo 2: Prompts Aplicados (Framework TRACI)
-- **Task:** Diagnóstico, agrupamento por assinatura e elaboração de plano de ação.
+- **Task:** Diagnóstico, agrupamento por assinatura canônica e elaboração de plano de ação.
 - **Role:** Agente Especialista SRE e Observabilidade (LogPulse AI).
-- **Audience:** Times de Desenvolvimento, QA e Liderança Técnica.
-- **Context:** Análise automática de telemetria do arquivo `{filename}`.
+- **Audience:** Equipes de Desenvolvimento, QA e Liderança Técnica.
+- **Context:** Análise de telemetria ({title_ctx}).
 - **Instructions:** Gerar tabela de frequência, isolar causas raízes e propor soluções.
 
 ---
 
 ## 1. Visão Geral e Principais Recursos
-- **Linhas Analisadas:** {metrics['total_lines']}
-- **Erros Críticos/Erros:** {metrics['total_errors']}
-- **Avisos Registrados:** {metrics['total_warns']}
+- **Linhas Analisadas:** {metrics['total_lines']:,}
+- **Erros Totais:** {metrics['total_errors']:,}
+- **Avisos Registrados:** {metrics['total_warns']:,}
 - **Padrões Únicos Identificados:** {len(metrics['error_counter'])}
+"""
+    if batch_summary:
+        md += "\n### Sumário de Ingestão por Arquivo\n"
+        md += "| Arquivo | Linhas | Erros | Avisos | Erros Únicos |\n| :--- | :---: | :---: | :---: | :---: |\n"
+        for item in batch_summary:
+            md += f"| {item['Arquivo']} | {item['Linhas']:,} | {item['Erros']:,} | {item['Avisos']:,} | {item['Erros Únicos']} |\n"
 
+    md += """
 ---
 
 ## 2. Tabela de Erros Mais Frequentes (Clusterizados por Padrão Canônico)
@@ -370,8 +346,8 @@ def build_sa_aic_markdown_report(filename: str, metrics: dict, diff_data: dict =
 
 ## 4. Recomendações e Próximos Passos
 1. Investigar causas raízes prioritariamente nos erros ranqueados no Top 3.
-2. Monitorar o comportamento dos avisos (warnings) recorrentes para prevenir degradação de performance.
-3. Repetir a validação após o próximo deploy usando o modo de comparação.
+2. Monitorar avisos recorrentes para evitar degradação progressiva de infraestrutura.
+3. Repetir a validação após novos deploys utilizando o modo comparativo (Diff).
 """
     return md
 
@@ -381,15 +357,22 @@ def build_sa_aic_markdown_report(filename: str, metrics: dict, diff_data: dict =
 st.title("🛡️ LogPulse AI — Analisador Inteligente & Gerador de Relatórios")
 st.markdown("""
 Plataforma agêntica para ingestão de arquivos de log nos formatos **.csv, .pdf, .txt, .log e .json**.
-Analise padrões em tempo real e faça download do relatório formal baseado no modelo **SA-AIC Document Template**.
+Analise arquivos individuais, processe múltiplos logs em lote ou compare versões (*Diff*).
 """)
 
 st.sidebar.header("⚙️ Configurações & Entrada")
 mode = st.sidebar.radio(
     "Selecione a Modalidade de Análise:",
-    ["📊 Diagnóstico de Log Único", "⚖️ Comparação entre Versões (Diff de Releases)"]
+    [
+        "📊 Diagnóstico de Log Único",
+        "📁 Análise Consolidada em Lote (Múltiplos Arquivos)",
+        "⚖️ Comparação entre Versões (Diff de Releases)"
+    ]
 )
 
+# -----------------------------------------------------------------------------
+# MODALIDADE 1: LOG ÚNICO
+# -----------------------------------------------------------------------------
 if mode == "📊 Diagnóstico de Log Único":
     uploaded_file = st.sidebar.file_uploader(
         "Envie seu arquivo de log:",
@@ -413,7 +396,6 @@ if mode == "📊 Diagnóstico de Log Único":
             c4.metric("Falhas Únicas", f"{len(metrics['error_counter'])}")
             
             st.divider()
-            
             st.subheader("🔍 Padrões de Falhas Agrupados (Clusterização Canônica)")
             if metrics['error_counter']:
                 table_rows = []
@@ -439,12 +421,10 @@ if mode == "📊 Diagnóstico de Log Único":
                 }).set_index("Assinatura")
                 st.bar_chart(chart_data)
             else:
-                st.success("🎉 Parabéns! Nenhum erro de severidade ERROR ou CRITICAL foi identificado no log.")
+                st.success("🎉 Parabéns! Nenhum erro de severidade ERROR ou CRITICAL foi identificado.")
 
             st.divider()
             st.subheader("📥 Exportação de Relatório (Modelo SA-AIC)")
-            st.info("O relatório gerado utiliza rigorosamente a estrutura do **Document Template Handout (CLEAR & TRACI)** contendo a síntese executiva, tabelas de impacto e recomendações.")
-            
             report_md = build_sa_aic_markdown_report(uploaded_file.name, metrics)
             report_html = build_sa_aic_html_report(uploaded_file.name, metrics)
             
@@ -456,43 +436,139 @@ if mode == "📊 Diagnóstico de Log Único":
                 pass
                 
             col_d1, col_d2, col_d3 = st.columns(3)
-            
             with col_d1:
-                st.download_button(
-                    label="📄 Baixar Relatório Formatado (.md)",
-                    data=report_md,
-                    file_name=f"relatorio_sa_aic_{uploaded_file.name}.md",
-                    mime="text/markdown",
-                    use_container_width=True
-                )
+                st.download_button("📄 Baixar Relatório (.md)", report_md, f"relatorio_{uploaded_file.name}.md", "text/markdown", use_container_width=True)
             with col_d2:
-                st.download_button(
-                    label="🌐 Baixar Relatório Visual (.html)",
-                    data=report_html,
-                    file_name=f"relatorio_sa_aic_{uploaded_file.name}.html",
-                    mime="text/html",
-                    use_container_width=True
-                )
+                st.download_button("🌐 Baixar Relatório (.html)", report_html, f"relatorio_{uploaded_file.name}.html", "text/html", use_container_width=True)
             with col_d3:
                 if pdf_bytes:
-                    st.download_button(
-                        label="📑 Baixar Relatório Oficial (.pdf)",
-                        data=pdf_bytes,
-                        file_name=f"relatorio_sa_aic_{uploaded_file.name}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
+                    st.download_button("📑 Baixar Relatório (.pdf)", pdf_bytes, f"relatorio_{uploaded_file.name}.pdf", "application/pdf", use_container_width=True)
                 else:
-                    st.download_button(
-                        label="📄 Baixar Código HTML para PDF",
-                        data=report_html,
-                        file_name=f"relatorio_sa_aic_{uploaded_file.name}.html",
-                        mime="text/html",
-                        use_container_width=True
-                    )
+                    st.download_button("📄 Baixar Código HTML para PDF", report_html, f"relatorio_{uploaded_file.name}.html", "text/html", use_container_width=True)
     else:
-        st.info("👆 Por favor, envie um arquivo de log (.log, .txt, .csv, .pdf) na barra lateral para iniciar a análise.")
+        st.info("👆 Por favor, envie um arquivo de log na barra lateral para iniciar a análise.")
 
+# -----------------------------------------------------------------------------
+# MODALIDADE 2: ANÁLISE CONSOLIDADA EM LOTE (MÚLTIPLOS ARQUIVOS)
+# -----------------------------------------------------------------------------
+elif mode == "📁 Análise Consolidada em Lote (Múltiplos Arquivos)":
+    uploaded_files = st.sidebar.file_uploader(
+        "Envie todos os seus arquivos de log de uma vez:",
+        type=["log", "txt", "csv", "pdf", "json"],
+        accept_multiple_files=True,
+        help="Selecione múltiplos arquivos para consolidação de métricas e ranking global."
+    )
+    
+    if uploaded_files:
+        st.success(f"📂 **{len(uploaded_files)} arquivos recebidos para processamento consolidado.**")
+        
+        batch_summary = []
+        global_error_counter = Counter()
+        global_warn_counter = Counter()
+        global_first_seen = {}
+        global_last_seen = {}
+        global_severities = {}
+        total_global_lines = 0
+        
+        with st.spinner("Processando todos os arquivos em lote..."):
+            for f in uploaded_files:
+                text = extract_content(f)
+                m = process_log(text)
+                
+                total_global_lines += m['total_lines']
+                global_error_counter.update(m['error_counter'])
+                global_warn_counter.update(m['warn_counter'])
+                
+                for k, v in m['first_seen'].items():
+                    if k not in global_first_seen:
+                        global_first_seen[k] = v
+                for k, v in m['last_seen'].items():
+                    global_last_seen[k] = v
+                for k, v in m['severities'].items():
+                    global_severities[k] = v
+                    
+                batch_summary.append({
+                    "Arquivo": f.name,
+                    "Linhas": m['total_lines'],
+                    "Erros": m['total_errors'],
+                    "Avisos": m['total_warns'],
+                    "Erros Únicos": len(m['error_counter'])
+                })
+                
+        # Métricas Globais
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Arquivos Analisados", len(uploaded_files))
+        c2.metric("Total de Linhas", f"{total_global_lines:,}")
+        c3.metric("Erros Totais (Todos os Logs)", f"{sum(global_error_counter.values()):,}", delta_color="inverse")
+        c4.metric("Padrões Únicos de Erro", len(global_error_counter))
+        
+        st.divider()
+        st.subheader("📋 Resumo por Arquivo de Log")
+        st.dataframe(pd.DataFrame(batch_summary), use_container_width=True)
+        
+        st.divider()
+        st.subheader("🌐 Top Falhas Globais (Consolidado de Todo o Ecossistema)")
+        if global_error_counter:
+            global_rows = []
+            tot_err = max(sum(global_error_counter.values()), 1)
+            for rank, (sig, count) in enumerate(global_error_counter.most_common(25), start=1):
+                prop = (count / tot_err) * 100
+                global_rows.append({
+                    "Rank": f"#{rank}",
+                    "Severidade": global_severities.get(sig, "ERROR"),
+                    "Assinatura Canônica do Erro": sig,
+                    "Ocorrências Totais": count,
+                    "Impacto Global (%)": f"{prop:.1f}%",
+                    "Primeiro Visto": global_first_seen.get(sig, "N/A"),
+                    "Último Visto": global_last_seen.get(sig, "N/A"),
+                })
+            df_glob = pd.DataFrame(global_rows)
+            st.dataframe(df_glob, use_container_width=True)
+        else:
+            st.success("🎉 Nenhum erro crítico encontrado nos arquivos analisados!")
+
+        # Geração de Relatório Consolidado
+        st.divider()
+        st.subheader("📥 Exportação do Relatório Geral Consolidado (Modelo SA-AIC)")
+        
+        global_metrics = {
+            "total_lines": total_global_lines,
+            "total_errors": sum(global_error_counter.values()),
+            "total_warns": sum(global_warn_counter.values()),
+            "error_counter": global_error_counter,
+            "warn_counter": global_warn_counter,
+            "first_seen": global_first_seen,
+            "last_seen": global_last_seen,
+            "severities": global_severities
+        }
+        
+        scope_title = f"Lote Consolidado ({len(uploaded_files)} Arquivos de Telemetria)"
+        rep_batch_md = build_sa_aic_markdown_report(scope_title, global_metrics, batch_summary=batch_summary)
+        rep_batch_html = build_sa_aic_html_report(scope_title, global_metrics, batch_summary=batch_summary)
+        
+        pdf_batch_bytes = None
+        try:
+            from weasyprint import HTML
+            pdf_batch_bytes = HTML(string=rep_batch_html).write_pdf()
+        except Exception:
+            pass
+            
+        b_c1, b_c2, b_c3 = st.columns(3)
+        with b_c1:
+            st.download_button("📄 Baixar Relatório Consolidado (.md)", rep_batch_md, "relatorio_geral_consolidado.md", "text/markdown", use_container_width=True)
+        with b_c2:
+            st.download_button("🌐 Baixar Relatório Consolidado (.html)", rep_batch_html, "relatorio_geral_consolidado.html", "text/html", use_container_width=True)
+        with b_c3:
+            if pdf_batch_bytes:
+                st.download_button("📑 Baixar Relatório Consolidado (.pdf)", pdf_batch_bytes, "relatorio_geral_consolidado.pdf", "application/pdf", use_container_width=True)
+            else:
+                st.download_button("📄 Baixar Código HTML para PDF", rep_batch_html, "relatorio_geral_consolidado.html", "text/html", use_container_width=True)
+    else:
+        st.info("👆 Por favor, selecione e envie seus múltiplos arquivos de log na barra lateral.")
+
+# -----------------------------------------------------------------------------
+# MODALIDADE 3: COMPARAÇÃO DE RELEASES (DIFF)
+# -----------------------------------------------------------------------------
 else:
     st.sidebar.subheader("Upload dos Logs para Diff")
     file_old = st.sidebar.file_uploader("Log da Versão Anterior (v1.x):", type=["log", "txt", "csv", "pdf", "json"], key="f_old")
@@ -558,29 +634,11 @@ else:
             
         c_btn1, c_btn2, c_btn3 = st.columns(3)
         with c_btn1:
-            st.download_button(
-                label="📄 Baixar Relatório Diff (.md)",
-                data=rep_diff_md,
-                file_name=f"relatorio_diff_{file_old.name}_vs_{file_new.name}.md",
-                mime="text/markdown",
-                use_container_width=True
-            )
+            st.download_button("📄 Baixar Relatório Diff (.md)", rep_diff_md, f"relatorio_diff_{file_old.name}_vs_{file_new.name}.md", "text/markdown", use_container_width=True)
         with c_btn2:
-            st.download_button(
-                label="🌐 Baixar Relatório Diff (.html)",
-                data=rep_diff_html,
-                file_name=f"relatorio_diff_{file_old.name}_vs_{file_new.name}.html",
-                mime="text/html",
-                use_container_width=True
-            )
+            st.download_button("🌐 Baixar Relatório Diff (.html)", rep_diff_html, f"relatorio_diff_{file_old.name}_vs_{file_new.name}.html", "text/html", use_container_width=True)
         with c_btn3:
             if pdf_diff_bytes:
-                st.download_button(
-                    label="📑 Baixar Relatório Diff (.pdf)",
-                    data=pdf_diff_bytes,
-                    file_name=f"relatorio_diff_{file_old.name}_vs_{file_new.name}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
+                st.download_button("📑 Baixar Relatório Diff (.pdf)", pdf_diff_bytes, f"relatorio_diff_{file_old.name}_vs_{file_new.name}.pdf", "application/pdf", use_container_width=True)
     else:
         st.info("👆 Por favor, envie os dois arquivos de log (versão anterior e versão atual) na barra lateral.")
