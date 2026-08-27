@@ -4,6 +4,7 @@ import re
 import io
 import os
 import requests
+import unicodedata
 from datetime import datetime
 from collections import Counter
 import pypdf
@@ -17,7 +18,7 @@ st.set_page_config(
 )
 
 # -----------------------------------------------------------------------------
-# 1. ENGINES DE PARSING AVANÇADO, SANITIZAÇÃO (ANTI-PII) & CAUSA RAIZ
+# 1. PARSER, SANITIZAÇÃO (ANTI-PII) & CAUSA RAIZ
 # -----------------------------------------------------------------------------
 RE_EMAIL = re.compile(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+')
 RE_CPF = re.compile(r'\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b')
@@ -27,8 +28,47 @@ RE_TIMESTAMP = re.compile(r'(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?
 RE_SEVERITY = re.compile(r'\b(CRITICAL|FATAL|ERROR|WARN|WARNING|INFO|DEBUG|TRACE)\b', re.IGNORECASE)
 RE_DYNAMIC = re.compile(r'(\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b|\b0x[0-9a-fA-F]+\b|\b\d{4,}\b|(?<=\=)[^\s,;&]+)')
 
+def clean_for_pdf(text: str) -> str:
+    """Substitui caracteres Unicode não suportados pelo FPDF por caracteres padrão."""
+    if not text:
+        return ""
+    text = str(text)
+    replacements = {
+        '•': '-',
+        '—': '-',
+        '–': '-',
+        '“': '"',
+        '”': '"',
+        '‘': "'",
+        '’': "'",
+        '→': '->',
+        '←': '<-',
+        '🟢': '[OK]',
+        '🔴': '[ERRO]',
+        '🟡': '[ALERTA]',
+        '⚠️': '[AVISO]',
+        '✅': '[RESOLVIDO]',
+        '🛡️': '',
+        '🎉': '',
+        '📊': '',
+        '📁': '',
+        '⚖️': '',
+        '📋': '',
+        '🌐': '',
+        '📈': '',
+        '📥': '',
+        '📑': '',
+        '📄': '',
+        '🔍': ''
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    # Converte caracteres mantendo a integridade sem estourar o charset Latin-1
+    text = unicodedata.normalize('NFKD', text).encode('latin-1', 'ignore').decode('latin-1')
+    return text
+
 def sanitize_text(text: str) -> str:
-    """Aplica sanitização estrita de PII e segredos em memória."""
+    """Mascara PII e segredos em memória."""
     text = RE_TOKEN.sub('[REDACTED_SECRET]', text)
     text = RE_EMAIL.sub('u***@domain.com', text)
     text = RE_CPF.sub('***.***.***-**', text)
@@ -36,7 +76,6 @@ def sanitize_text(text: str) -> str:
     return text
 
 def canonicalize_error(message: str) -> str:
-    """Extrai assinatura canônica removendo variáveis voláteis."""
     clean = re.sub(r'^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?\S*\s*', '', message)
     clean = RE_SEVERITY.sub('', clean)
     clean = RE_DYNAMIC.sub('<ID>', clean)
@@ -44,28 +83,27 @@ def canonicalize_error(message: str) -> str:
     return clean[:160] if clean else "GenericSystemError: Unexpected failure"
 
 def infer_root_cause(signature: str) -> tuple:
-    """Heurística para inferência de Causa Raiz e Plano de Ação Técnico."""
     sig_lower = signature.lower()
     if "hikaripool" in sig_lower or "connection is not available" in sig_lower or "pool exhausted" in sig_lower:
-        return "Esgotamento no pool de conexões do Banco de Dados", "Verificar queries travadas e aumentar 'maximumPoolSize'."
+        return "Esgotamento no pool de conexoes do Banco de Dados", "Verificar queries travadas e aumentar maximumPoolSize."
     elif "gatewaytimeout" in sig_lower or "504" in sig_lower:
-        return "Indisponibilidade ou lentidão em API de terceiros", "Implementar Circuit Breaker e retries com exponential backoff."
+        return "Indisponibilidade ou lentidao em API externa", "Implementar Circuit Breaker e retries com exponential backoff."
     elif "nullpointerexception" in sig_lower or "undefined" in sig_lower:
-        return "Tentativa de acesso a objeto nulo no código de negócio", "Adicionar validação defensiva de payload e anotações @NonNull."
+        return "Tentativa de acesso a objeto nulo no codigo de negocio", "Adicionar validacao defensiva de payload e checagem de nulos."
     elif "socket closed" in sig_lower or "redisconnection" in sig_lower:
-        return "Falha de comunicação no cluster de cache Redis", "Ajustar timeout de socket e checar keep-alive do cluster."
+        return "Falha de comunicacao no cluster de cache Redis", "Ajustar timeout de socket e checar keep-alive do cluster."
     elif "ratelimit" in sig_lower or "429" in sig_lower:
-        return "Excesso de requisições por cliente / Tentativas suspeitas", "Validar políticas de rate limit e bloquear IPs abusivos no WAF."
+        return "Excesso de requisicoes por cliente ou tentativas suspeitas", "Validar politicas de rate limit e bloquear IPs abusivos no WAF."
     elif "diskspace" in sig_lower or "no space left" in sig_lower:
-        return "Esgotamento de espaço no volume de disco", "Executar expurgo/rotação de logs e redimensionar partições."
+        return "Esgotamento de espaco no volume de disco", "Executar expurgo/rotacao de logs e redimensionar particoes."
     elif "serializationexception" in sig_lower or "json" in sig_lower:
-        return "Incompatibilidade no schema de serialização JSON", "Ajustar anotações de formato (ex: @JsonFormat) no DTO de resposta."
+        return "Incompatibilidade no schema de serializacao JSON", "Ajustar anotacoes de formato (ex: @JsonFormat) no DTO."
     elif "unauthorized" in sig_lower or "401" in sig_lower:
-        return "Token de sessão expirado ou credencial inválida", "Revisar fluxo de renovação (refresh token) e autenticação."
+        return "Token de sessao expirado ou credencial invalida", "Revisar fluxo de renovacao (refresh token) e autenticacao."
     elif "deadlock" in sig_lower:
-        return "Concorrência e travamento mútuo em transações SQL", "Reordenar operações de escrita em transações concorrentes."
+        return "Concorrencia e travamento mutuo em transacoes SQL", "Reordenar operacoes de escrita em transacoes concorrentes."
     else:
-        return "Falha de execução de rotina sistêmica", "Inspecionar rastreamento completo e isolar módulo de origem."
+        return "Falha de execucao de rotina sistemica", "Inspecionar rastreamento completo e isolar modulo de origem."
 
 def extract_content(uploaded_file) -> str:
     ext = uploaded_file.name.split('.')[-1].lower()
@@ -145,7 +183,7 @@ def process_log(raw_text: str):
     }
 
 # -----------------------------------------------------------------------------
-# 2. GERADOR DE PDF COMPLETO (FPDF2 PURO PYTHON) — SEGUINDO SA-AIC INTEGRAL
+# 2. GERADOR DE PDF COM CODIFICAÇÃO SANITIZADA
 # -----------------------------------------------------------------------------
 class FullSAAICPDF(FPDF):
     def header(self):
@@ -154,34 +192,34 @@ class FullSAAICPDF(FPDF):
         self.set_font('Helvetica', 'B', 10)
         self.set_text_color(255, 255, 255)
         self.set_xy(10, 4)
-        self.cell(0, 10, 'SA-AIC - Modelo de Documento para Distribuicao | LogPulse AI', 0, 1, 'L')
+        self.cell(0, 10, clean_for_pdf('SA-AIC - Modelo de Documento para Distribuicao | LogPulse AI'), 0, 1, 'L')
         self.ln(4)
 
     def footer(self):
         self.set_y(-15)
         self.set_font('Helvetica', 'I', 8)
         self.set_text_color(100, 116, 139)
-        self.cell(0, 10, f'Pagina {self.page_no()}', 0, 0, 'R')
+        self.cell(0, 10, clean_for_pdf(f'Pagina {self.page_no()}'), 0, 0, 'R')
 
 def generate_pdf_report(context_title: str, metrics: dict, diff_data: dict = None, batch_summary: list = None) -> bytes:
     pdf = FullSAAICPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     
-    # Cabeçalho Principal
+    # Cabeçalho
     pdf.set_font('Helvetica', 'B', 14)
     pdf.set_text_color(15, 23, 42)
-    pdf.cell(0, 7, 'Relatorio Oficial de Diagnostico & Inteligencia de Logs', ln=True)
+    pdf.cell(0, 7, clean_for_pdf('Relatorio Oficial de Diagnostico e Inteligencia de Logs'), ln=True)
     pdf.set_font('Helvetica', '', 8.5)
     pdf.set_text_color(71, 85, 105)
     now_str = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
-    pdf.cell(0, 5, f'Contexto: {context_title} | Emissao: {now_str} | Engine: LogPulse AI', ln=True)
+    pdf.cell(0, 5, clean_for_pdf(f'Contexto: {context_title} | Emissao: {now_str} | Engine: LogPulse AI'), ln=True)
     pdf.ln(3)
 
-    # Passo 1: Framework CLEAR
+    # Passo 1: CLEAR
     pdf.set_font('Helvetica', 'B', 10)
     pdf.set_text_color(15, 23, 42)
-    pdf.cell(0, 6, 'Passo 1: Definir Criterios Especificos da Tarefa (Framework CLEAR)', ln=True)
+    pdf.cell(0, 6, clean_for_pdf('Passo 1: Definir Criterios Especificos da Tarefa (Framework CLEAR)'), ln=True)
     pdf.set_font('Helvetica', '', 8)
     clear_items = [
         ("1. Relevancia do Contexto:", "Priorizacao estrita de falhas CRITICAL, FATAL e ERROR. Warnings agrupados por impacto."),
@@ -192,58 +230,65 @@ def generate_pdf_report(context_title: str, metrics: dict, diff_data: dict = Non
     ]
     for k, v in clear_items:
         pdf.set_font('Helvetica', 'B', 7.5)
-        pdf.cell(42, 4.5, k, 0, 0)
+        pdf.cell(42, 4.5, clean_for_pdf(k), 0, 0)
         pdf.set_font('Helvetica', '', 7.5)
-        pdf.cell(0, 4.5, v, 0, 1)
+        pdf.cell(0, 4.5, clean_for_pdf(v), 0, 1)
     pdf.ln(2)
 
-    # Passo 2: Prompts TRACI
+    # Passo 2: TRACI
     pdf.set_font('Helvetica', 'B', 10)
-    pdf.cell(0, 6, 'Passo 2: Engenharia de Prompts Aplicada (Framework TRACI)', ln=True)
+    pdf.cell(0, 6, clean_for_pdf('Passo 2: Engenharia de Prompts Aplicada (Framework TRACI)'), ln=True)
     pdf.set_fill_color(248, 250, 252)
     pdf.rect(10, pdf.get_y(), 190, 22, 'F')
     pdf.set_font('Helvetica', '', 7.5)
-    pdf.multi_cell(0, 4.2, f"• Task: Analisar arquivos e consolidar contagens unicas de erros com isolamento de causas raizes.\n• Role: Especialista em Observabilidade e SRE (LogPulse AI).\n• Audience: Equipes de Engenharia, QA e Tech Leads.\n• Context: Processamento de {metrics['total_lines']:,} linhas de telemetria ({context_title}).\n• Instructions: Sanitizar dados confidenciais, tabular falhas por severidade e apontar acoes recomendadas.")
+    traci_text = (
+        f"- Task: Analisar arquivos e consolidar contagens unicas de erros com isolamento de causas raizes.\n"
+        f"- Role: Especialista em Observabilidade e SRE (LogPulse AI).\n"
+        f"- Audience: Equipes de Engenharia, QA e Tech Leads.\n"
+        f"- Context: Processamento de {metrics['total_lines']:,} linhas de telemetria ({context_title}).\n"
+        f"- Instructions: Sanitizar dados confidenciais, tabular falhas por severidade e apontar acoes recomendadas."
+    )
+    pdf.multi_cell(0, 4.2, clean_for_pdf(traci_text))
     pdf.ln(3)
 
-    # Visão Geral & Métricas
+    # 1. Visão Geral
     pdf.set_font('Helvetica', 'B', 10)
-    pdf.cell(0, 6, '1. Introducao & Visao Geral do Volume Analisado', ln=True)
+    pdf.cell(0, 6, clean_for_pdf('1. Introducao e Visao Geral do Volume Analisado'), ln=True)
     pdf.set_font('Helvetica', '', 8)
-    pdf.cell(0, 5, f"Volume Total de Linhas: {metrics['total_lines']:,} | Falhas Detectadas: {metrics['total_errors']:,} | Avisos (Warnings): {metrics['total_warns']:,} | Padroes Unicos: {len(metrics['error_counter'])}", ln=True)
+    pdf.cell(0, 5, clean_for_pdf(f"Volume Total de Linhas: {metrics['total_lines']:,} | Falhas Detectadas: {metrics['total_errors']:,} | Avisos (Warnings): {metrics['total_warns']:,} | Padroes Unicos: {len(metrics['error_counter'])}"), ln=True)
     pdf.ln(2)
 
-    # Tabela de Ingestão em Lote (se houver)
+    # Sumário de Lote (se houver)
     if batch_summary:
         pdf.set_font('Helvetica', 'B', 8.5)
-        pdf.cell(0, 5, 'Sumario da Ingestao por Arquivo de Log:', ln=True)
+        pdf.cell(0, 5, clean_for_pdf('Sumario da Ingestao por Arquivo de Log:'), ln=True)
         pdf.set_fill_color(241, 245, 249)
         pdf.set_font('Helvetica', 'B', 7.5)
-        pdf.cell(70, 5, 'Arquivo', 1, 0, 'L', True)
-        pdf.cell(30, 5, 'Linhas', 1, 0, 'C', True)
-        pdf.cell(30, 5, 'Erros', 1, 0, 'C', True)
-        pdf.cell(30, 5, 'Avisos', 1, 0, 'C', True)
-        pdf.cell(30, 5, 'Erros Unicos', 1, 1, 'C', True)
+        pdf.cell(70, 5, clean_for_pdf('Arquivo'), 1, 0, 'L', True)
+        pdf.cell(30, 5, clean_for_pdf('Linhas'), 1, 0, 'C', True)
+        pdf.cell(30, 5, clean_for_pdf('Erros'), 1, 0, 'C', True)
+        pdf.cell(30, 5, clean_for_pdf('Avisos'), 1, 0, 'C', True)
+        pdf.cell(30, 5, clean_for_pdf('Erros Unicos'), 1, 1, 'C', True)
         pdf.set_font('Helvetica', '', 7.5)
         for it in batch_summary:
-            pdf.cell(70, 5, str(it['Arquivo'])[:38], 1, 0, 'L')
-            pdf.cell(30, 5, f"{it['Linhas']:,}", 1, 0, 'C')
-            pdf.cell(30, 5, f"{it['Erros']:,}", 1, 0, 'C')
-            pdf.cell(30, 5, f"{it['Avisos']:,}", 1, 0, 'C')
-            pdf.cell(30, 5, str(it['Erros Únicos']), 1, 1, 'C')
+            pdf.cell(70, 5, clean_for_pdf(str(it['Arquivo'])[:38]), 1, 0, 'L')
+            pdf.cell(30, 5, clean_for_pdf(f"{it['Linhas']:,}"), 1, 0, 'C')
+            pdf.cell(30, 5, clean_for_pdf(f"{it['Erros']:,}"), 1, 0, 'C')
+            pdf.cell(30, 5, clean_for_pdf(f"{it['Avisos']:,}"), 1, 0, 'C')
+            pdf.cell(30, 5, clean_for_pdf(str(it['Erros Únicos'])), 1, 1, 'C')
         pdf.ln(3)
 
-    # Tabela de Falhas Mais Frequentes
+    # 2. Tabela de Erros
     pdf.set_font('Helvetica', 'B', 10)
-    pdf.cell(0, 6, '2. Tabela de Erros Mais Frequentes & Diagnostico de Causa Raiz', ln=True)
+    pdf.cell(0, 6, clean_for_pdf('2. Tabela de Erros Mais Frequentes e Diagnostico de Causa Raiz'), ln=True)
     pdf.set_fill_color(241, 245, 249)
     pdf.set_font('Helvetica', 'B', 7)
-    pdf.cell(10, 5, 'Rank', 1, 0, 'C', True)
-    pdf.cell(14, 5, 'Sev', 1, 0, 'C', True)
-    pdf.cell(66, 5, 'Assinatura Canonica do Erro', 1, 0, 'L', True)
-    pdf.cell(14, 5, 'Qtd', 1, 0, 'C', True)
-    pdf.cell(14, 5, '% Total', 1, 0, 'C', True)
-    pdf.cell(72, 5, 'Causa Provavel & Acao Recomendada', 1, 1, 'L', True)
+    pdf.cell(10, 5, clean_for_pdf('Rank'), 1, 0, 'C', True)
+    pdf.cell(14, 5, clean_for_pdf('Sev'), 1, 0, 'C', True)
+    pdf.cell(66, 5, clean_for_pdf('Assinatura Canonica do Erro'), 1, 0, 'L', True)
+    pdf.cell(14, 5, clean_for_pdf('Qtd'), 1, 0, 'C', True)
+    pdf.cell(14, 5, clean_for_pdf('% Total'), 1, 0, 'C', True)
+    pdf.cell(72, 5, clean_for_pdf('Causa Provavel e Acao Recomendada'), 1, 1, 'L', True)
 
     pdf.set_font('Helvetica', '', 6.5)
     tot_err = max(metrics['total_errors'], 1)
@@ -252,40 +297,43 @@ def generate_pdf_report(context_title: str, metrics: dict, diff_data: dict = Non
         sev = metrics['severities'].get(sig, "ERROR")
         cause, act = infer_root_cause(sig)
         diag_str = f"{cause} ({act})"
-        clean_sig = sig.encode('latin-1', 'replace').decode('latin-1')[:45]
-        clean_diag = diag_str.encode('latin-1', 'replace').decode('latin-1')[:52]
-        pdf.cell(10, 5, f"#{rank}", 1, 0, 'C')
-        pdf.cell(14, 5, str(sev)[:7], 1, 0, 'C')
-        pdf.cell(66, 5, clean_sig, 1, 0, 'L')
-        pdf.cell(14, 5, f"{count:,}", 1, 0, 'C')
-        pdf.cell(14, 5, f"{prop:.1f}%", 1, 0, 'C')
-        pdf.cell(72, 5, clean_diag, 1, 1, 'L')
+        pdf.cell(10, 5, clean_for_pdf(f"#{rank}"), 1, 0, 'C')
+        pdf.cell(14, 5, clean_for_pdf(str(sev)[:7]), 1, 0, 'C')
+        pdf.cell(66, 5, clean_for_pdf(sig[:45]), 1, 0, 'L')
+        pdf.cell(14, 5, clean_for_pdf(f"{count:,}"), 1, 0, 'C')
+        pdf.cell(14, 5, clean_for_pdf(f"{prop:.1f}%"), 1, 0, 'C')
+        pdf.cell(72, 5, clean_for_pdf(diag_str[:52]), 1, 1, 'L')
     pdf.ln(3)
 
-    # Quadro Diff (se houver)
+    # 3. Quadro Diff
     if diff_data:
         pdf.set_font('Helvetica', 'B', 10)
-        pdf.cell(0, 6, '3. Quadro Comparativo de Releases (Diff de Atualizacoes)', ln=True)
+        pdf.cell(0, 6, clean_for_pdf('3. Quadro Comparativo de Releases (Diff de Atualizacoes)'), ln=True)
         pdf.set_font('Helvetica', '', 7.5)
-        pdf.cell(0, 4.5, f"Variacao de Falhas: v1 ({diff_data['old_errors']:,}) -> v2 ({diff_data['new_errors']:,}) | Variacao: {diff_data['diff_pct']:+.1f}%", ln=True)
+        pdf.cell(0, 4.5, clean_for_pdf(f"Variacao de Falhas: v1 ({diff_data['old_errors']:,}) -> v2 ({diff_data['new_errors']:,}) | Variacao: {diff_data['diff_pct']:+.1f}%"), ln=True)
         pdf.set_font('Helvetica', 'B', 7.5)
         pdf.set_text_color(22, 163, 74)
-        pdf.cell(0, 4.5, f"Erros Resolvidos com Sucesso: {len(diff_data['resolved'])} falhas eliminadas", ln=True)
+        pdf.cell(0, 4.5, clean_for_pdf(f"Erros Resolvidos com Sucesso: {len(diff_data['resolved'])} falhas eliminadas"), ln=True)
         pdf.set_text_color(220, 38, 38)
-        pdf.cell(0, 4.5, f"Novas Regressoes Introduzidas: {len(diff_data['regressions'])} novas assinaturas de erro", ln=True)
+        pdf.cell(0, 4.5, clean_for_pdf(f"Novas Regressoes Introduzidas: {len(diff_data['regressions'])} novas assinaturas de erro"), ln=True)
         pdf.set_text_color(15, 23, 42)
         pdf.ln(2)
 
-    # Diretrizes Operacionais (Capítulos 3 a 7)
+    # 4. Recomendações
     pdf.set_font('Helvetica', 'B', 10)
-    pdf.cell(0, 6, '4. Processo de Desenvolvimento & Recomendacoes Tecnicas', ln=True)
+    pdf.cell(0, 6, clean_for_pdf('4. Processo de Desenvolvimento e Recomendacoes Tecnicas'), ln=True)
     pdf.set_font('Helvetica', '', 7.5)
-    pdf.multi_cell(0, 4, "1. Isolamento de Causa Raiz: Atuar prioritariamente nas falhas #1 e #2 do ranking de frequencia.\n2. Inspecao de Concorrencia: Verificar pools de conexao, retries e limites de sockets em rotinas criticas.\n3. Prevencao de Regressoes: Executar comparacao automatizada no pipeline de CI/CD antes do deploy em producao.")
+    rec_text = (
+        "1. Isolamento de Causa Raiz: Atuar prioritariamente nas falhas #1 e #2 do ranking de frequencia.\n"
+        "2. Inspecao de Concorrencia: Verificar pools de conexao, retries e limites de sockets em rotinas criticas.\n"
+        "3. Prevencao de Regressoes: Executar comparacao automatizada no pipeline de CI/CD antes do deploy em producao."
+    )
+    pdf.multi_cell(0, 4, clean_for_pdf(rec_text))
 
     return bytes(pdf.output())
 
 # -----------------------------------------------------------------------------
-# 3. GERADORES DE RELATÓRIO HTML & MARKDOWN INTEGRAL
+# 3. GERADORES DE RELATÓRIO HTML & MARKDOWN
 # -----------------------------------------------------------------------------
 DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="pt-BR">
@@ -321,7 +369,7 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
 <table>
     <thead><tr><th style="width:28%;">Critério CLEAR</th><th>Definição Operacional Aplicada</th></tr></thead>
     <tbody>
-        <tr><td><b>1. Relevância do Contexto</b></td><td>Priorização estrita de falhas <code>CRITICAL</code>, <code>FATAL</code> e <code>ERROR</code>. Avisos <code>WARN</code> agrupados por recorrência. Ruídos informativos (<code>INFO</code>/<code>DEBUG</code>) filtrados da visualização de criticidade.</td></tr>
+        <tr><td><b>1. Relevância do Contexto</b></td><td>Priorização estrita de falhas <code>CRITICAL</code>, <code>FATAL</code> e <code>ERROR</code>. Avisos <code>WARN</code> agrupados por recorrência. Ruídos informativos (<code>INFO</code>/<code>DEBUG</code>) filtrados da visualização crítica.</td></tr>
         <tr><td><b>2. Tom e Estilo</b></td><td>Técnico, analítico, formal e orientado a Engenharia de Software e SRE.</td></tr>
         <tr><td><b>3. Tratamento de Incertezas</b></td><td>Mascaramento Anti-PII em memória de senhas, tokens Bearer/JWT, CPFs e IPs. Linhas corrompidas recebem marcadores sequenciais.</td></tr>
         <tr><td><b>4. Precisão e Confiabilidade</b></td><td>Contagem determinística $O(1)$ de ocorrências por hash canônico sem riscos de alucinação numérica.</td></tr>
@@ -538,7 +586,7 @@ def render_markdown_report(context_title: str, metrics: dict, diff_data: dict = 
     return md
 
 # -----------------------------------------------------------------------------
-# 4. INTERFACE STREAMLIT AVANÇADA
+# 4. INTERFACE STREAMLIT
 # -----------------------------------------------------------------------------
 st.title("🛡️ LogPulse AI — Analisador Inteligente & Auditor SA-AIC")
 st.markdown("Motor agêntico de observabilidade com **agregação de padrões, inferência de causa raiz e geração de relatórios oficiais (PDF, Markdown e HTML)**.")
@@ -571,7 +619,6 @@ if mode == "📊 Diagnóstico de Log Único":
             metrics = process_log(raw_text) if raw_text else None
             
         if metrics:
-            # Métricas em Cartões
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Linhas Analisadas", f"{metrics['total_lines']:,}")
             error_rate = (metrics['total_errors'] / max(metrics['total_lines'], 1)) * 100
@@ -580,8 +627,6 @@ if mode == "📊 Diagnóstico de Log Único":
             c4.metric("Padrões Únicos", f"{len(metrics['error_counter'])}")
             
             st.divider()
-            
-            # Tabela de Padrões Consolidada
             st.subheader("🔍 Padrões de Falhas Detectados & Causa Raiz Heurística")
             if metrics['error_counter']:
                 table_rows = []
@@ -602,13 +647,11 @@ if mode == "📊 Diagnóstico de Log Único":
                 df_res = pd.DataFrame(table_rows)
                 st.dataframe(df_res, use_container_width=True)
                 
-                # Stack traces sanitizadas para inspeção
                 with st.expander("🛠️ Ver Amostras de Stack Traces Sanitizadas"):
                     for sig, count in metrics['error_counter'].most_common(5):
                         st.markdown(f"**Falha:** `{sig}` ({count} ocorrências)")
                         st.code(metrics['sample_traces'].get(sig, "Sem stack trace adicional"), language="text")
                         
-                # Gráficos
                 c_g1, c_g2 = st.columns(2)
                 with c_g1:
                     st.subheader("📈 Top 5 Erros Mais Recorrentes")
@@ -731,7 +774,7 @@ elif mode == "📁 Análise Consolidada em Lote (Múltiplos Arquivos)":
             st.download_button("🌐 Baixar Relatório Consolidado em HTML (.html)", data=rep_batch_html, file_name="relatorio_sa_aic_lote_consolidado.html", mime="text/html", use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# MODALIDADE 3: DIFF (COMPARAÇÃO DE RELEASES)
+# MODALIDADE 3: DIFF
 # -----------------------------------------------------------------------------
 else:
     file_old = st.sidebar.file_uploader("Versão Anterior (v1.x):", type=["log", "txt", "csv", "pdf", "json"], key="f_old")
