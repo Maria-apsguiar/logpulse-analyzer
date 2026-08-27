@@ -8,17 +8,25 @@ from datetime import datetime
 from collections import Counter
 import pypdf
 
-# Tentar importar gerador de PDF
-PDF_GENERATOR = None
-try:
-    from xhtml2pdf import pisa
-    PDF_GENERATOR = "pisa"
-except ImportError:
+# -----------------------------------------------------------------------------
+# CONFIGURAÇÃO DE GERADORES DE PDF NATIVOS
+# -----------------------------------------------------------------------------
+def convert_html_to_pdf(html_content: str) -> bytes:
+    """Gera binário PDF nativo e autêntico."""
+    try:
+        from xhtml2pdf import pisa
+        pdf_io = io.BytesIO()
+        pisa_status = pisa.CreatePDF(io.StringIO(html_content), dest=pdf_io)
+        if not pisa_status.err:
+            return pdf_io.getvalue()
+    except Exception:
+        pass
     try:
         from weasyprint import HTML
-        PDF_GENERATOR = "weasyprint"
-    except ImportError:
-        PDF_GENERATOR = None
+        return HTML(string=html_content).write_pdf()
+    except Exception:
+        pass
+    return None
 
 st.set_page_config(
     page_title="LogPulse AI — Analisador & Gerador SA-AIC",
@@ -34,7 +42,7 @@ RE_EMAIL = re.compile(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+')
 RE_CPF = re.compile(r'\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b')
 RE_IP = re.compile(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b')
 RE_TOKEN = re.compile(r'(?i)(bearer\s+[a-zA-Z0-9_\-\.]+|jwt\s+[a-zA-Z0-9_\-\.]+|token[:=]\s*[a-zA-Z0-9_\-]+|password[:=]\s*\S+)')
-RE_TIMESTAMP = re.compile(r'(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?|\b[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\b)')
+RE_TIMESTAMP = re.compile(r'(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?|\b[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\b)')
 RE_SEVERITY = re.compile(r'\b(CRITICAL|FATAL|ERROR|WARN|WARNING|INFO|DEBUG|TRACE)\b', re.IGNORECASE)
 RE_DYNAMIC = re.compile(r'(\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b|\b0x[0-9a-fA-F]+\b|\b\d{4,}\b|(?<=\=)[^\s,;&]+)')
 
@@ -119,29 +127,7 @@ def process_log(raw_text: str):
     }
 
 # -----------------------------------------------------------------------------
-# 2. MOTOR DE GERAÇÃO DE PDF MULTI-ENGINE
-# -----------------------------------------------------------------------------
-def convert_html_to_pdf(html_content: str) -> bytes:
-    """Converte HTML para PDF usando a engine disponível."""
-    if PDF_GENERATOR == "weasyprint":
-        try:
-            from weasyprint import HTML
-            return HTML(string=html_content).write_pdf()
-        except Exception:
-            pass
-    if PDF_GENERATOR == "pisa" or True:
-        try:
-            from xhtml2pdf import pisa
-            pdf_io = io.BytesIO()
-            pisa_status = pisa.CreatePDF(io.StringIO(html_content), dest=pdf_io)
-            if not pisa_status.err:
-                return pdf_io.getvalue()
-        except Exception:
-            pass
-    return None
-
-# -----------------------------------------------------------------------------
-# 3. GERENCIADOR DINÂMICO DE TEMPLATES (SA-AIC)
+# 2. TEMPLATES PADRÃO & GERENCIADOR MULTI-FORMATO (.HTML, .MD, .PDF)
 # -----------------------------------------------------------------------------
 DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="pt-BR">
@@ -154,7 +140,7 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
         @bottom-right { content: counter(page); font-size: 8pt; color: #64748b; }
         @bottom-left { content: "SA-AIC - Modelo de Documento para Distribuição"; font-size: 8pt; color: #64748b; }
     }
-    body { font-family: Arial, sans-serif; color: #0f172a; line-height: 1.4; font-size: 9pt; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #0f172a; line-height: 1.4; font-size: 9pt; }
     .header-card { background-color: #1e3a8a; color: #ffffff; padding: 16px 20px; border-radius: 6px; margin-bottom: 14px; }
     .header-card h1 { font-size: 14pt; margin: 0 0 4px 0; color: #ffffff; }
     .header-card p { font-size: 8.5pt; margin: 0; color: #93c5fd; }
@@ -234,7 +220,7 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
 
 <h3>4. Principais Desafios e Soluções</h3>
 <ul>
-    <li><b>Desafio 1 (Volume de Logs):</b> Leitura por geradores/streaming O(1) de espaço.</li>
+    <li><b>Desafio 1 (Volume de Logs):</b> Leitura por streaming O(1) de espaço.</li>
     <li><b>Desafio 2 (Dados Variáveis):</b> Normalização de parâmetros dinâmicos via regex compilada.</li>
 </ul>
 
@@ -247,12 +233,23 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
 """
 
 def load_template(custom_url: str = None, uploaded_template = None) -> str:
-    """Carrega o template HTML a partir de URL externa, arquivo no repositório ou upload."""
+    """Lê templates em .html, .md, .txt ou .pdf."""
     if uploaded_template is not None:
+        fname = uploaded_template.name.lower()
         try:
-            return uploaded_template.read().decode('utf-8')
-        except Exception:
-            pass
+            if fname.endswith('.pdf'):
+                reader = pypdf.PdfReader(uploaded_template)
+                text = "\n".join([p.extract_text() or "" for p in reader.pages])
+                # Encapsular texto extraído do PDF em layout HTML compatível
+                return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{{font-family:Arial;padding:20px;font-size:9pt;line-height:1.4;}}</style></head><body>{text.replace(chr(10), '<br>')}</body></html>"""
+            elif fname.endswith(('.html', '.htm')):
+                return uploaded_template.read().decode('utf-8', errors='ignore')
+            else:
+                # .md / .txt
+                raw = uploaded_template.read().decode('utf-8', errors='ignore')
+                return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{{font-family:Arial;padding:20px;font-size:9pt;line-height:1.4;}}</style></head><body><pre style="white-space:pre-wrap;font-family:inherit;">{raw}</pre></body></html>"""
+        except Exception as e:
+            st.sidebar.warning(f"Erro ao ler template submetido: {e}. Usando padrão.")
             
     if custom_url and custom_url.strip():
         try:
@@ -260,9 +257,8 @@ def load_template(custom_url: str = None, uploaded_template = None) -> str:
             if r.status_code == 200:
                 return r.text
         except Exception:
-            st.sidebar.warning("Não foi possível carregar o template da URL fornecida. Usando template padrão.")
+            st.sidebar.warning("Não foi possível acessar a URL do template. Usando padrão.")
             
-    # Verificar se existe report_template.html no repositório
     if os.path.exists("report_template.html"):
         try:
             with open("report_template.html", "r", encoding="utf-8") as f:
@@ -272,11 +268,9 @@ def load_template(custom_url: str = None, uploaded_template = None) -> str:
             
     return DEFAULT_HTML_TEMPLATE
 
-def render_report(template_str: str, context_title: str, metrics: dict, diff_data: dict = None, batch_summary: list = None) -> str:
-    """Preenche as variáveis do template com os dados analisados."""
+def render_html_report(template_str: str, context_title: str, metrics: dict, diff_data: dict = None, batch_summary: list = None) -> str:
     total_errors = max(metrics['total_errors'], 1)
     
-    # Gerar linhas da tabela de erros
     error_rows_html = ""
     for rank, (sig, count) in enumerate(metrics['error_counter'].most_common(15), start=1):
         prop = (count / total_errors) * 100
@@ -295,7 +289,6 @@ def render_report(template_str: str, context_title: str, metrics: dict, diff_dat
         </tr>
         """
         
-    # Seção Batch
     batch_section_html = ""
     if batch_summary:
         b_rows = "".join([
@@ -310,7 +303,6 @@ def render_report(template_str: str, context_title: str, metrics: dict, diff_dat
         </table>
         """
         
-    # Seção Diff
     diff_section_html = ""
     if diff_data:
         diff_section_html = f"""
@@ -337,19 +329,105 @@ def render_report(template_str: str, context_title: str, metrics: dict, diff_dat
     content = content.replace("{{DIFF_SECTION}}", diff_section_html)
     return content
 
+def render_markdown_report(context_title: str, metrics: dict, diff_data: dict = None, batch_summary: list = None) -> str:
+    now_str = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+    total_errors = max(metrics['total_errors'], 1)
+    
+    md = f"""# SA-AIC - Modelo de Documento para Distribuição
+# Relatório de Diagnóstico & Inteligência de Logs — LogPulse AI
+
+**Contexto Analisado:** {context_title}  
+**Data da Análise:** {now_str}  
+**Volume Total de Linhas:** {metrics['total_lines']:,} | **Erros Detectados:** {metrics['total_errors']:,} | **Avisos:** {metrics['total_warns']:,}
+
+---
+
+## Definir Critérios da Tarefa de IA e Escrever Prompts
+
+### Passo 1: Definir Critérios Específicos da Tarefa (Framework CLEAR)
+1. **Relevância do Contexto:** Foco prioritário em eventos `CRITICAL`, `FATAL` e `ERROR`. Avisos (`WARN`) agregados por frequência.
+2. **Tom e Estilo da Linguagem:** Técnico, formal, assertivo e orientado a Engenharia de Software e SRE.
+3. **Tratamento de Incertezas:** Mascaramento em memória de Anti-PII, credenciais e tokens.
+4. **Precisão e Confiabilidade:** Contagem determinística agregada em $O(1)$ sem risco de alucinações.
+5. **Eficiência da Resposta:** Resumo estruturado em matrizes com percentuais de impacto e diffs de correções.
+
+### Passo 2: Escrever Prompts (Framework TRACI)
+- **Task:** Diagnóstico, agrupamento por assinatura canônica e elaboração de plano de ação.
+- **Role:** Engenheiro Especialista SRE e Auditor de Confiabilidade.
+- **Audience:** Times de Desenvolvimento, QA e Liderança Técnica.
+- **Context:** Análise de telemetria ({context_title}).
+- **Instructions:** Gerar tabela de frequência, isolar causas raízes e apontar soluções.
+
+---
+
+## Direções do Modelo de Documentação
+
+### 1. Introdução & Visão Geral
+- **Linhas Analisadas:** {metrics['total_lines']:,}
+- **Erros Detectados:** {metrics['total_errors']:,}
+- **Avisos (Warnings):** {metrics['total_warns']:,}
+- **Padrões Únicos:** {len(metrics['error_counter'])}
+"""
+    if batch_summary:
+        md += "\n### Sumário de Ingestão por Arquivo (Lote)\n"
+        md += "| Arquivo | Linhas | Erros | Avisos | Erros Únicos |\n| :--- | :---: | :---: | :---: | :---: |\n"
+        for item in batch_summary:
+            md += f"| {item['Arquivo']} | {item['Linhas']:,} | {item['Erros']:,} | {item['Avisos']:,} | {item['Erros Únicos']} |\n"
+
+    md += """
+---
+
+### 2. Tabela de Erros Mais Frequentes (Clusterizados por Padrão Canônico)
+
+| Rank | Severidade | Assinatura / Categoria do Erro | Ocorrências | % do Total | Primeiro Visto | Último Visto |
+| :---: | :---: | :--- | :---: | :---: | :---: | :---: |
+"""
+    for rank, (sig, count) in enumerate(metrics['error_counter'].most_common(15), start=1):
+        prop = (count / total_errors) * 100
+        sev = metrics['severities'].get(sig, "ERROR")
+        first = metrics['first_seen'].get(sig, "N/A")
+        last = metrics['last_seen'].get(sig, "N/A")
+        md += f"| #{rank} | `{sev}` | `{sig}` | {count:,} | {prop:.1f}% | {first} | {last} |\n"
+
+    if diff_data:
+        md += f"""
+---
+
+### 3. Quadro Comparativo de Releases (Diff de Atualizações)
+- **Variação de Erros:** {diff_data['old_errors']:,} (v1) → {diff_data['new_errors']:,} (v2) ({diff_data['diff_pct']:+.1f}%)
+- **Erros Resolvidos com Sucesso:** {len(diff_data['resolved'])}
+- **Novas Regressões Detectadas:** {len(diff_data['regressions'])}
+
+#### 🟢 Erros Resolvidos na Nova Versão
+"""
+        for err in list(diff_data['resolved'])[:6]:
+            md += f"- ✅ `{err}`\n"
+        md += "\n#### 🔴 Novas Regressões Introduzidas\n"
+        for err in list(diff_data['regressions'])[:6]:
+            md += f"- ⚠️ `{err}`\n"
+
+    md += """
+---
+
+### 4. Processo de Desenvolvimento & Recomendações Técnicas
+1. **Isolamento de Causa Raiz:** Foco prioritário nos erros ranqueados no Top 3.
+2. **Sanitização e Segurança:** Todos os dados sensíveis foram mascarados.
+3. **Ações Preventivas:** Políticas de retry e dimensionamento de conexões.
+"""
+    return md
+
 # -----------------------------------------------------------------------------
-# 4. INTERFACE DE USUÁRIO STREAMLIT
+# 3. INTERFACE STREAMLIT
 # -----------------------------------------------------------------------------
 st.title("🛡️ LogPulse AI — Analisador Inteligente & Gerador SA-AIC")
 st.markdown("""
 Motor agêntico para análise de telemetria em arquivos **.csv, .pdf, .txt, .log e .json**.
-Gera relatórios oficiais sob demanda nos formatos **PDF, HTML e Markdown**.
+Gera relatórios oficiais sob demanda nos formatos **PDF (.pdf), Markdown (.md) e HTML (.html)**.
 """)
 
-# Sidebar: Configuração e Template Dinâmico
-st.sidebar.header("⚙️ Configurações Gerais")
+st.sidebar.header("⚙️ Modalidade de Análise")
 mode = st.sidebar.radio(
-    "Modalidade de Operação:",
+    "Selecione a Operação:",
     [
         "📊 Diagnóstico de Log Único",
         "📁 Análise Consolidada em Lote (Múltiplos Arquivos)",
@@ -359,8 +437,8 @@ mode = st.sidebar.radio(
 
 st.sidebar.divider()
 with st.sidebar.expander("📄 Gerenciador de Template Dinâmico", expanded=False):
-    st.caption("Você pode carregar um novo modelo HTML ou informar a URL Raw do GitHub/Google Drive sem alterar o código do app:")
-    template_file = st.file_uploader("Subir novo Template (.html):", type=["html", "htm"])
+    st.caption("Suba um modelo (.html, .pdf, .md, .txt) ou informe uma URL direta para atualizar o template:")
+    template_file = st.file_uploader("Subir novo Template:", type=["html", "htm", "pdf", "md", "txt"])
     template_url = st.text_input("Ou URL direta do Template:", placeholder="https://raw.githubusercontent.com/.../report_template.html")
 
 active_template = load_template(custom_url=template_url, uploaded_template=template_file)
@@ -369,10 +447,7 @@ active_template = load_template(custom_url=template_url, uploaded_template=templ
 # MODALIDADE 1: LOG ÚNICO
 # -----------------------------------------------------------------------------
 if mode == "📊 Diagnóstico de Log Único":
-    uploaded_file = st.sidebar.file_uploader(
-        "Envie seu arquivo de log:",
-        type=["log", "txt", "csv", "pdf", "json"]
-    )
+    uploaded_file = st.sidebar.file_uploader("Envie seu arquivo de log:", type=["log", "txt", "csv", "pdf", "json"])
     
     if uploaded_file is not None:
         with st.spinner("Processando arquivo..."):
@@ -406,22 +481,35 @@ if mode == "📊 Diagnóstico de Log Único":
                 st.success("🎉 Nenhum erro encontrado no log analisado!")
 
             st.divider()
-            st.subheader("📥 Exportação de Relatório Oficial (Modelo SA-AIC)")
-            report_html = render_report(active_template, uploaded_file.name, metrics)
+            st.subheader("📥 Exportação do Relatório Oficial (Modelo SA-AIC)")
+            
+            report_html = render_html_report(active_template, uploaded_file.name, metrics)
+            report_md = render_markdown_report(uploaded_file.name, metrics)
             pdf_bytes = convert_html_to_pdf(report_html)
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             with col1:
-                st.download_button(
-                    label="📑 Baixar Relatório Oficial em PDF (.pdf)",
-                    data=pdf_bytes if pdf_bytes else report_html.encode('utf-8'),
-                    file_name=f"relatorio_sa_aic_{uploaded_file.name}.pdf" if pdf_bytes else f"relatorio_sa_aic_{uploaded_file.name}.html",
-                    mime="application/pdf" if pdf_bytes else "text/html",
-                    use_container_width=True
-                )
+                if pdf_bytes:
+                    st.download_button(
+                        label="📑 Baixar Relatório Oficial em PDF (.pdf)",
+                        data=pdf_bytes,
+                        file_name=f"relatorio_sa_aic_{uploaded_file.name}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("⚠️ Gerando via HTML nativo. Use o botão HTML para salvar em PDF no navegador.")
             with col2:
                 st.download_button(
-                    label="🌐 Baixar Relatório em HTML (.html)",
+                    label="📄 Baixar Relatório Formatado (.md)",
+                    data=report_md,
+                    file_name=f"relatorio_sa_aic_{uploaded_file.name}.md",
+                    mime="text/markdown",
+                    use_container_width=True
+                )
+            with col3:
+                st.download_button(
+                    label="🌐 Baixar Relatório Visual (.html)",
                     data=report_html,
                     file_name=f"relatorio_sa_aic_{uploaded_file.name}.html",
                     mime="text/html",
@@ -434,11 +522,7 @@ if mode == "📊 Diagnóstico de Log Único":
 # MODALIDADE 2: LOTE (MÚLTIPLOS ARQUIVOS)
 # -----------------------------------------------------------------------------
 elif mode == "📁 Análise Consolidada em Lote (Múltiplos Arquivos)":
-    uploaded_files = st.sidebar.file_uploader(
-        "Envie múltiplos arquivos de log:",
-        type=["log", "txt", "csv", "pdf", "json"],
-        accept_multiple_files=True
-    )
+    uploaded_files = st.sidebar.file_uploader("Envie múltiplos arquivos de log:", type=["log", "txt", "csv", "pdf", "json"], accept_multiple_files=True)
     
     if uploaded_files:
         batch_summary = []
@@ -491,19 +575,31 @@ elif mode == "📁 Análise Consolidada em Lote (Múltiplos Arquivos)":
             "severities": global_sev
         }
         scope_title = f"Lote Consolidado ({len(uploaded_files)} Logs)"
-        rep_batch_html = render_report(active_template, scope_title, global_metrics, batch_summary=batch_summary)
+        rep_batch_html = render_html_report(active_template, scope_title, global_metrics, batch_summary=batch_summary)
+        rep_batch_md = render_markdown_report(scope_title, global_metrics, batch_summary=batch_summary)
         pdf_batch_bytes = convert_html_to_pdf(rep_batch_html)
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
+            if pdf_batch_bytes:
+                st.download_button(
+                    label="📑 Baixar Relatório Consolidado em PDF (.pdf)",
+                    data=pdf_batch_bytes,
+                    file_name="relatorio_sa_aic_lote_consolidado.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            else:
+                st.warning("⚠️ Gerando via HTML nativo.")
+        with col2:
             st.download_button(
-                label="📑 Baixar Relatório Consolidado em PDF (.pdf)",
-                data=pdf_batch_bytes if pdf_batch_bytes else rep_batch_html.encode('utf-8'),
-                file_name="relatorio_sa_aic_lote_consolidado.pdf" if pdf_batch_bytes else "relatorio_sa_aic_lote_consolidado.html",
-                mime="application/pdf" if pdf_batch_bytes else "text/html",
+                label="📄 Baixar Relatório Consolidado (.md)",
+                data=rep_batch_md,
+                file_name="relatorio_sa_aic_lote_consolidado.md",
+                mime="text/markdown",
                 use_container_width=True
             )
-        with col2:
+        with col3:
             st.download_button(
                 label="🌐 Baixar Relatório Consolidado em HTML (.html)",
                 data=rep_batch_html,
@@ -573,19 +669,31 @@ else:
         st.subheader("📥 Exportação do Relatório Comparativo (Diff Modelo SA-AIC)")
         
         scope_diff = f"{file_old.name} (v1) vs {file_new.name} (v2)"
-        rep_diff_html = render_report(active_template, scope_diff, m_new, diff_data=diff_data)
+        rep_diff_html = render_html_report(active_template, scope_diff, m_new, diff_data=diff_data)
+        rep_diff_md = render_markdown_report(scope_diff, m_new, diff_data=diff_data)
         pdf_diff_bytes = convert_html_to_pdf(rep_diff_html)
         
-        col_d1, col_d2 = st.columns(2)
+        col_d1, col_d2, col_d3 = st.columns(3)
         with col_d1:
+            if pdf_diff_bytes:
+                st.download_button(
+                    label="📑 Baixar Relatório Comparativo em PDF (.pdf)",
+                    data=pdf_diff_bytes,
+                    file_name=f"relatorio_sa_aic_diff_{file_old.name}_vs_{file_new.name}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            else:
+                st.warning("⚠️ Gerando via HTML nativo.")
+        with col_d2:
             st.download_button(
-                label="📑 Baixar Relatório Comparativo em PDF (.pdf)",
-                data=pdf_diff_bytes if pdf_diff_bytes else rep_diff_html.encode('utf-8'),
-                file_name=f"relatorio_sa_aic_diff_{file_old.name}_vs_{file_new.name}.pdf" if pdf_diff_bytes else f"relatorio_sa_aic_diff_{file_old.name}_vs_{file_new.name}.html",
-                mime="application/pdf" if pdf_diff_bytes else "text/html",
+                label="📄 Baixar Relatório Comparativo (.md)",
+                data=rep_diff_md,
+                file_name=f"relatorio_sa_aic_diff_{file_old.name}_vs_{file_new.name}.md",
+                mime="text/markdown",
                 use_container_width=True
             )
-        with col_d2:
+        with col_d3:
             st.download_button(
                 label="🌐 Baixar Relatório Comparativo em HTML (.html)",
                 data=rep_diff_html,
