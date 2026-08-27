@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<style>
+    @page {
+        size: A4;
+        margin: 15mm;
+        @bottom-right { content: counter(page); font-size: 8pt; color: #64748b; }
+        @bottom-left { content: "SA-AIC - Modelo de Documento para Distribuição"; font-size: 8pt; color: #64748b; }
+    }
+    body { font-family: Arial, sans-serif; color: #0f172a; line-height: 1.4; font-size: 9pt; }
+    .header-card { background-color: #1e3a8a; color: #ffffff; padding: 16px 20px; border-radius: 6px; margin-bottom: 14px; }
+    .header-card h1 { font-size: 14pt; margin: 0 0 4px 0; color: #ffffff; }
+    .header-card p { font-size: 8.5pt; margin: 0; color: #93c5fd; }
+    .badge { display: inline-block; background-color: #2563eb; color: #fff; font-size: 7pt; font-weight: bold; padding: 2px 6px; border-radius: 3px; text-transform: uppercase; margin-bottom: 4px; }
+    h2 { font-size: 11pt; color: #0f172a; border-left: 4px solid #2563eb; padding-left: 8px; margin-top: 14px; margin-bottom: 6px; text-transform: uppercase; }
+    h3 { font-size: 9.5pt; color: #1e3a8a; margin-top: 10px; margin-bottom: 4px; }
+    table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 8pt; }
+    th, td { border: 1px solid #cbd5e1; padding: 5px 6px; text-align: left; }
+    th { background-color: #f1f5f9; color: #0f172a; font-weight: bold; }
+    tr:nth-child(even) td { background-color: #f8fafc; }
+    .box-note { background-color: #eff6ff; border: 1px solid #bfdbfe; padding: 8px 10px; border-radius: 4px; margin: 8px 0; }
+    .prompt-box { background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 8px 10px; margin-bottom: 8px; font-family: monospace; font-size: 8pt; }
+</style>
+</head>
+<body>
+<div class="header-card">
+    <div class="badge">SA-AIC - Modelo de Documento para Distribuição</div>
+    <h1>Relatório Oficial de Auditoria & Inteligência de Logs</h1>
+    <p><b>Contexto:</b> {{CONTEXT_TITLE}} | <b>Emissão:</b> {{GENERATION_DATE}} | <b>Engine:</b> LogPulse AI</p>
+</div>
+
+<h2>Definir Critérios da Tarefa de IA e Escrever Prompts</h2>
+<h3>Passo 1: Definir Critérios Específicos da Tarefa (Framework CLEAR)</h3>
+<table>
+    <thead><tr><th style="width:28%;">Critério CLEAR</th><th>Definição Operacional Aplicada</th></tr></thead>
+    <tbody>
+        <tr><td><b>1. Relevância do Contexto</b></td><td>Priorização de falhas <code>CRITICAL</code>, <code>FATAL</code> e <code>ERROR</code>. Avisos (<code>WARN</code>) agregados por recorrência.</td></tr>
+        <tr><td><b>2. Tom e Estilo</b></td><td>Técnico, analítico, formal e orientado a Engenharia de Software e SRE.</td></tr>
+        <tr><td><b>3. Tratamento de Incertezas</b></td><td>Mascaramento Anti-PII e segredos em memória. Linhas corrompidas recebem marcadores sequenciais.</td></tr>
+        <tr><td><b>4. Precisão e Confiabilidade</b></td><td>Contagem determinística O(1) de frequência eliminando alucinações numéricas.</td></tr>
+        <tr><td><b>5. Eficiência da Resposta</b></td><td>Matrizes de impacto percentual (%) e tabelas comparativas de regressões.</td></tr>
+    </tbody>
+</table>
+
+<h3>Passo 2: Escrever Prompts (Framework TRACI)</h3>
+<div class="prompt-box">
+<b>Tarefa Principal (Diagnóstico & Observabilidade):</b><br>
+• <b>Task:</b> Extrair e tabular falhas únicas dos arquivos submetidos.<br>
+• <b>Role:</b> Engenheiro Especialista SRE e Auditor de Confiabilidade.<br>
+• <b>Audience:</b> Tech Leads, Desenvolvedores e Squads de Sustentação.<br>
+• <b>Context:</b> {{CONTEXT_TITLE}} com {{TOTAL_LINES}} linhas analisadas.<br>
+• <b>Instructions:</b> Sanitizar credenciais, computar frequência única e apontar plano de ação.
+</div>
+
+<h2>Direções do Modelo de Documentação</h2>
+<h3>1. Introdução & Visão Geral</h3>
+<p><b>Escopo:</b> Foram analisadas <b>{{TOTAL_LINES}} linhas</b>, detectando <b>{{TOTAL_ERRORS}} erros</b> e <b>{{TOTAL_WARNS}} avisos</b> distribuídos em <b>{{UNIQUE_ERRORS}} assinaturas canônicas exclusivas</b>.</p>
+
+{{BATCH_SECTION}}
+
+<h3>2. Tabela de Falhas Mais Frequentes (Clusterização Canônica)</h3>
+<table>
+    <thead>
+        <tr>
+            <th style="width:6%;">Rank</th>
+            <th style="width:10%;">Severidade</th>
+            <th>Assinatura Canônica do Erro</th>
+            <th style="width:10%;">Ocorrências</th>
+            <th style="width:8%;">% Total</th>
+            <th style="width:14%;">Primeiro Visto</th>
+            <th style="width:14%;">Último Visto</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{ERROR_TABLE_ROWS}}
+    </tbody>
+</table>
+
+{{DIFF_SECTION}}
+
+<h3>3. Processo de Desenvolvimento & Recomendações Técnicas</h3>
+<ol>
+    <li><b>Isolamento de Causa Raiz:</b> Foco imediato nos erros do Top 3 do ranking.</li>
+    <li><b>Sanitização e Segurança:</b> Chaves, e-mails, tokens e IPs foram substituídos por tags de anonimização.</li>
+    <li><b>Ações Preventivas:</b> Dimensionar pools e políticas de retry para evitar cascata de falhas.</li>
+</ol>
+
+<h3>4. Principais Desafios e Soluções</h3>
+<ul>
+    <li><b>Desafio 1 (Volume de Logs):</b> Leitura por geradores/streaming O(1) de espaço.</li>
+    <li><b>Desafio 2 (Dados Variáveis):</b> Normalização de parâmetros dinâmicos via regex compilada.</li>
+</ul>
+
+<h3>5. Cenários de Exemplo</h3>
+<div class="box-note">
+    <b>Cenário de Análise:</b> Auditoria do ecossistema para mitigação de falhas em produção e garantia de estabilidade pós-deploys.
+</div>
+</body>
+</html>
