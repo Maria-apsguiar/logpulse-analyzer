@@ -1,6 +1,5 @@
 streamlit
 pandas
 pypdf
-xhtml2pdf
+fpdf2
 requests
-```[cite: 9]
